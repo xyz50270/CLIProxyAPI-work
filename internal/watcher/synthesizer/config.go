@@ -1,6 +1,7 @@
 package synthesizer
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -35,8 +36,66 @@ func (s *ConfigSynthesizer) Synthesize(ctx *SynthesisContext) ([]*coreauth.Auth,
 	out = append(out, s.synthesizeOpenAICompat(ctx)...)
 	// Vertex-compat
 	out = append(out, s.synthesizeVertexCompat(ctx)...)
+	// AICO API Keys
+	out = append(out, s.synthesizeAICOKeys(ctx)...)
 
 	return out, nil
+}
+
+// synthesizeAICOKeys creates Auth entries for AICO API keys.
+func (s *ConfigSynthesizer) synthesizeAICOKeys(ctx *SynthesisContext) []*coreauth.Auth {
+	cfg := ctx.Config
+	now := ctx.Now
+	idGen := ctx.IDGenerator
+
+	out := make([]*coreauth.Auth, 0, len(cfg.AICOKey))
+	for i := range cfg.AICOKey {
+		entry := cfg.AICOKey[i]
+		key := strings.TrimSpace(entry.APIKey)
+		if key == "" {
+			continue
+		}
+		prefix := strings.TrimSpace(entry.Prefix)
+		base := strings.TrimSpace(entry.BaseURL)
+		proxyURL := strings.TrimSpace(entry.ProxyURL)
+		id, token := idGen.Next("aico:apikey", key, base)
+		attrs := map[string]string{
+			"source":  fmt.Sprintf("config:aico[%s]", token),
+			"api_key": key,
+		}
+		if entry.Priority != 0 {
+			attrs["priority"] = strconv.Itoa(entry.Priority)
+		}
+		if base != "" {
+			attrs["base_url"] = base
+		}
+		if entry.InsecureSkipVerify {
+			attrs["insecure_skip_verify"] = "true"
+		}
+		if hash := diff.ComputeAICOModelsHash(entry.Models); hash != "" {
+			attrs["models_hash"] = hash
+		}
+		if len(entry.Models) > 0 {
+			if b, err := json.Marshal(entry.Models); err == nil {
+				attrs["aico_models"] = string(b)
+			}
+		}
+		addConfigHeadersToAttrs(entry.Headers, attrs)
+		a := &coreauth.Auth{
+			ID:         id,
+			Provider:   "aico",
+			Label:      "aico-apikey",
+			Prefix:     prefix,
+			Status:     coreauth.StatusActive,
+			ProxyURL:   proxyURL,
+			Attributes: attrs,
+			CreatedAt:  now,
+			UpdatedAt:  now,
+		}
+		ApplyAuthExcludedModelsMeta(a, cfg, entry.ExcludedModels, "apikey")
+		out = append(out, a)
+	}
+	return out
 }
 
 // synthesizeGeminiKeys creates Auth entries for Gemini API keys.

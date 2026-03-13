@@ -356,3 +356,19 @@ nonstream-keepalive-interval: 0
 #       params: # JSON paths (gjson/sjson syntax) to remove from the payload
 #         - "generationConfig.thinkingConfig.thinkingBudget"
 #         - "generationConfig.responseJsonSchema"
+
+# Work AI (AICO) 配置
+aico-endpoint: "https://xxxxxxxxx"
+aico-api-key:
+ - api-key: "xxxxxxxxxx"
+   insecure-skip-verify: true
+   models:
+     - name: "flow ID" # 工作流 ID
+       alias: "deepseek-r1"                  # 客户端调用的名字
+       target-model: "Deepseek-R1"           # 发送给 AICO 的名字
+     - name: "flow ID"
+       alias: "deepseek-v3"
+       target-model: "Deepseek-V3-0324"
+     - name: "flow ID"
+       alias: "glm-4"
+       target-model: "GLM-4.7"

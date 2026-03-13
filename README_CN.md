@@ -41,6 +41,7 @@ GLM CODING PLAN 是专为AI编码打造的订阅套餐，每月最低仅需20元
 - 新增 Claude Code 支持（OAuth 登录）
 - 新增 Qwen Code 支持（OAuth 登录）
 - 新增 iFlow 支持（OAuth 登录）
+- 新增 Work AI (AICO) 支持 (API Key)
 - 支持流式与非流式响应
 - 函数调用/工具支持
 - 多模态输入（文本、图片）

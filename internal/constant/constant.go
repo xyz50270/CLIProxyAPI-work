@@ -24,4 +24,7 @@ const (
 
 	// Antigravity represents the Antigravity response format identifier.
 	Antigravity = "antigravity"
+
+	// AICO represents the AICO provider identifier.
+	AICO = "aico"
 )

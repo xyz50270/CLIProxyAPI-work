@@ -111,6 +111,12 @@ type Config struct {
 	// AmpCode contains Amp CLI upstream configuration, management restrictions, and model mappings.
 	AmpCode AmpCode `yaml:"ampcode" json:"ampcode"`
 
+	// AICOKey defines AICO API key configurations with optional routing overrides.
+	AICOKey []AICOKey `yaml:"aico-api-key" json:"aico-api-key"`
+
+	// AICOEndpoint defines the default upstream URL for AICO workflow execution.
+	AICOEndpoint string `yaml:"aico-endpoint" json:"aico-endpoint"`
+
 	// OAuthExcludedModels defines per-provider global model exclusions applied to OAuth/file-backed auth entries.
 	OAuthExcludedModels map[string][]string `yaml:"oauth-excluded-models,omitempty" json:"oauth-excluded-models,omitempty"`
 
@@ -462,6 +468,63 @@ type GeminiModel struct {
 func (m GeminiModel) GetName() string  { return m.Name }
 func (m GeminiModel) GetAlias() string { return m.Alias }
 
+// AICOKey represents the configuration for an AICO API key,
+// including optional overrides for upstream base URL, proxy routing, and headers.
+type AICOKey struct {
+	// APIKey is the authentication key for accessing AICO API services.
+	APIKey string `yaml:"api-key" json:"api-key"`
+
+	// Priority controls selection preference when multiple credentials match.
+	// Higher values are preferred; defaults to 0.
+	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
+
+	// Prefix optionally namespaces models for this credential (e.g., "teamA/aico-model").
+	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
+
+	// BaseURL optionally overrides the AICO API endpoint.
+	BaseURL string `yaml:"base-url,omitempty" json:"base-url,omitempty"`
+
+	// ProxyURL optionally overrides the global proxy for this API key.
+	ProxyURL string `yaml:"proxy-url,omitempty" json:"proxy-url,omitempty"`
+
+	// InsecureSkipVerify optionally skips TLS certificate verification for this key.
+	InsecureSkipVerify bool `yaml:"insecure-skip-verify,omitempty" json:"insecure-skip-verify,omitempty"`
+
+	// Models defines upstream model names and aliases for request routing.
+	// For AICO, the Name should be the workflow ID.
+	Models []AICOModel `yaml:"models,omitempty" json:"models,omitempty"`
+
+	// Headers optionally adds extra HTTP headers for requests sent with this key.
+	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
+
+	// ExcludedModels lists model IDs that should be excluded for this provider.
+	ExcludedModels []string `yaml:"excluded-models,omitempty" json:"excluded-models,omitempty"`
+}
+
+func (k AICOKey) GetAPIKey() string  { return k.APIKey }
+func (k AICOKey) GetBaseURL() string { return k.BaseURL }
+
+// AICOModel describes a mapping between an alias and the actual upstream workflow ID.
+type AICOModel struct {
+	// Name is the upstream workflow ID used when issuing requests.
+	Name string `yaml:"name" json:"name"`
+
+	// Alias is the client-facing model name that maps to Name.
+	Alias string `yaml:"alias" json:"alias"`
+
+	// ContentField optionally overrides the default "content" field name.
+	ContentField string `yaml:"content-field,omitempty" json:"content-field,omitempty"`
+
+	// ModelField optionally overrides the default "model" field name.
+	ModelField string `yaml:"model-field,omitempty" json:"model-field,omitempty"`
+
+	// TargetModel is the actual model name sent to AICO (e.g., "Deepseek-R1").
+	TargetModel string `yaml:"target-model,omitempty" json:"target-model,omitempty"`
+}
+
+func (m AICOModel) GetName() string  { return m.Name }
+func (m AICOModel) GetAlias() string { return m.Alias }
+
 // OpenAICompatibility represents the configuration for OpenAI API compatibility
 // with external providers, allowing model aliases to be routed through OpenAI API format.
 type OpenAICompatibility struct {
@@ -620,6 +683,9 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 
 	// Sanitize Gemini API key configuration and migrate legacy entries.
 	cfg.SanitizeGeminiKeys()
+
+	// Sanitize AICO API keys.
+	cfg.SanitizeAICOKeys()
 
 	// Sanitize Vertex-compatible API keys: drop entries without base-url
 	cfg.SanitizeVertexCompatKeys()
@@ -850,6 +916,34 @@ func (cfg *Config) SanitizeGeminiKeys() {
 		out = append(out, entry)
 	}
 	cfg.GeminiKey = out
+}
+
+// SanitizeAICOKeys deduplicates and normalizes AICO credentials.
+func (cfg *Config) SanitizeAICOKeys() {
+	if cfg == nil {
+		return
+	}
+
+	seen := make(map[string]struct{}, len(cfg.AICOKey))
+	out := cfg.AICOKey[:0]
+	for i := range cfg.AICOKey {
+		entry := cfg.AICOKey[i]
+		entry.APIKey = strings.TrimSpace(entry.APIKey)
+		if entry.APIKey == "" {
+			continue
+		}
+		entry.Prefix = normalizeModelPrefix(entry.Prefix)
+		entry.BaseURL = strings.TrimSpace(entry.BaseURL)
+		entry.ProxyURL = strings.TrimSpace(entry.ProxyURL)
+		entry.Headers = NormalizeHeaders(entry.Headers)
+		entry.ExcludedModels = NormalizeExcludedModels(entry.ExcludedModels)
+		if _, exists := seen[entry.APIKey]; exists {
+			continue
+		}
+		seen[entry.APIKey] = struct{}{}
+		out = append(out, entry)
+	}
+	cfg.AICOKey = out
 }
 
 func normalizeModelPrefix(prefix string) string {

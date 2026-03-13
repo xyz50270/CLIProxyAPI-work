@@ -417,6 +417,8 @@ func (s *Service) ensureExecutorsForAuthWithMode(a *coreauth.Auth, forceReplace 
 		return
 	case "antigravity":
 		s.coreManager.RegisterExecutor(executor.NewAntigravityExecutor(s.cfg))
+	case "aico":
+		s.coreManager.RegisterExecutor(executor.NewAICOExecutor(s.cfg))
 	case "claude":
 		s.coreManager.RegisterExecutor(executor.NewClaudeExecutor(s.cfg))
 	case "qwen":
@@ -908,6 +910,16 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 	case "kimi":
 		models = registry.GetKimiModels()
 		models = applyExcludedModels(models, excluded)
+	case "aico":
+		if entry := s.resolveConfigAICOKey(a); entry != nil {
+			if len(entry.Models) > 0 {
+				models = buildAICOConfigModels(entry)
+			}
+			if authKind == "apikey" {
+				excluded = entry.ExcludedModels
+			}
+		}
+		models = applyExcludedModels(models, excluded)
 	default:
 		// Handle OpenAI-compatibility providers by name using config
 		if s.cfg != nil {
@@ -1173,6 +1185,30 @@ func (s *Service) resolveConfigCodexKey(auth *coreauth.Auth) *config.CodexKey {
 		}
 	}
 	return nil
+}
+
+func (s *Service) resolveConfigAICOKey(auth *coreauth.Auth) *config.AICOKey {
+	if auth == nil || s.cfg == nil {
+		return nil
+	}
+	var attrKey string
+	if auth.Attributes != nil {
+		attrKey = strings.TrimSpace(auth.Attributes["api_key"])
+	}
+	for i := range s.cfg.AICOKey {
+		entry := &s.cfg.AICOKey[i]
+		if strings.EqualFold(strings.TrimSpace(entry.APIKey), attrKey) {
+			return entry
+		}
+	}
+	return nil
+}
+
+func buildAICOConfigModels(entry *config.AICOKey) []*ModelInfo {
+	if entry == nil {
+		return nil
+	}
+	return buildConfigModels(entry.Models, "sinopec", "aico")
 }
 
 func (s *Service) oauthExcludedModels(provider, authKind string) []string {
