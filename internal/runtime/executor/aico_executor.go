@@ -17,6 +17,8 @@ import (
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
 	log "github.com/sirupsen/logrus"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 // AICOExecutor implements a stateless executor for AICO AI provider.
@@ -66,7 +68,6 @@ func (e *AICOExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth,
 }
 
 func (e *AICOExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (resp cliproxyexecutor.Response, err error) {
-	// For AICO, baseModel might be an alias. We need the actual workflow ID.
 	requestedModel := thinking.ParseSuffix(req.Model).ModelName
 	workflowID := e.resolveWorkflowID(auth, requestedModel)
 
@@ -81,12 +82,11 @@ func (e *AICOExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 	from := opts.SourceFormat
 	to := sdktranslator.FromString("aico")
 
-	// Pass field name overrides via workflowID encoding
-	contentField, modelField := e.resolveFieldNames(auth, requestedModel)
-	targetModel := e.resolveTargetModel(auth, requestedModel)
-	encodedID := fmt.Sprintf("%s|%s|%s|%s", workflowID, contentField, modelField, targetModel)
+	// 1. Translate via standard translator
+	translated := sdktranslator.TranslateRequest(from, to, workflowID, req.Payload, false)
 
-	translated := sdktranslator.TranslateRequest(from, to, encodedID, req.Payload, false)
+	// 2. Apply field name and target model overrides locally in Executor
+	translated = e.applyOverrides(auth, requestedModel, translated)
 
 	url := strings.TrimSuffix(baseURL, "/") + "/" + workflowID
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(translated))
@@ -148,15 +148,13 @@ func (e *AICOExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 	appendAPIResponseChunk(ctx, e.cfg, body)
 	log.Debugf("aico executor: non-stream raw response: %s", string(body))
 	
-	// Translate response back
 	var param any
-	out := sdktranslator.TranslateNonStream(ctx, to, from, workflowID, opts.OriginalRequest, translated, body, &param)
+	out := sdktranslator.TranslateNonStream(ctx, to, from, requestedModel, opts.OriginalRequest, translated, body, &param)
 	resp = cliproxyexecutor.Response{Payload: []byte(out), Headers: httpResp.Header.Clone()}
 	return resp, nil
 }
 
 func (e *AICOExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (_ *cliproxyexecutor.StreamResult, err error) {
-	// For AICO, baseModel might be an alias. We need the actual workflow ID.
 	requestedModel := thinking.ParseSuffix(req.Model).ModelName
 	workflowID := e.resolveWorkflowID(auth, requestedModel)
 
@@ -171,12 +169,11 @@ func (e *AICOExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 	from := opts.SourceFormat
 	to := sdktranslator.FromString("aico")
 
-	// Pass field name overrides via workflowID encoding
-	contentField, modelField := e.resolveFieldNames(auth, requestedModel)
-	targetModel := e.resolveTargetModel(auth, requestedModel)
-	encodedID := fmt.Sprintf("%s|%s|%s|%s", workflowID, contentField, modelField, targetModel)
+	// 1. Translate
+	translated := sdktranslator.TranslateRequest(from, to, workflowID, req.Payload, true)
 
-	translated := sdktranslator.TranslateRequest(from, to, encodedID, req.Payload, true)
+	// 2. Apply overrides
+	translated = e.applyOverrides(auth, requestedModel, translated)
 
 	url := strings.TrimSuffix(baseURL, "/") + "/" + workflowID
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(translated))
@@ -241,29 +238,37 @@ func (e *AICOExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 		scanner := bufio.NewScanner(httpResp.Body)
 		scanner.Buffer(nil, 52_428_800) // 50MB
 		var param any
+		var currentEvent string
+
 		for scanner.Scan() {
 			line := scanner.Bytes()
 			if len(line) == 0 {
 				continue
 			}
-			appendAPIResponseChunk(ctx, e.cfg, line)
-			log.Debugf("aico executor: stream raw chunk: %s", string(line))
+			log.Debugf("aico executor: stream raw line: %s", string(line))
 			
-			// AICO SSE might have "data: " prefix or just be JSON.
-			// The spec doesn't explicitly say "data: " but it says "streaming (SSE)".
-			// Usually SSE means "data: " prefix.
-			dataLine := line
-			if bytes.HasPrefix(line, []byte("data:")) {
-				dataLine = bytes.TrimSpace(line[5:])
-			}
-			
-			if len(dataLine) == 0 {
+			if bytes.HasPrefix(line, []byte("event:")) {
+				currentEvent = strings.TrimSpace(string(line[6:]))
 				continue
 			}
 
-			chunks := sdktranslator.TranslateStream(ctx, to, from, workflowID, opts.OriginalRequest, translated, bytes.Clone(dataLine), &param)
-			for i := range chunks {
-				out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunks[i])}
+			if bytes.HasPrefix(line, []byte("data:")) {
+				dataLine := bytes.TrimSpace(line[5:])
+				if len(dataLine) == 0 {
+					continue
+				}
+				
+				// Re-inject event context into the data chunk for more professional translation
+				chunkJSON := dataLine
+				if currentEvent != "" {
+					chunkJSON, _ = sjson.SetBytes(dataLine, "event_type", currentEvent)
+				}
+				
+				appendAPIResponseChunk(ctx, e.cfg, chunkJSON)
+				chunks := sdktranslator.TranslateStream(ctx, to, from, requestedModel, opts.OriginalRequest, translated, chunkJSON, &param)
+				for i := range chunks {
+					out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunks[i])}
+				}
 			}
 		}
 		if errScan := scanner.Err(); errScan != nil {
@@ -275,14 +280,51 @@ func (e *AICOExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 	return &cliproxyexecutor.StreamResult{Headers: httpResp.Header.Clone(), Chunks: out}, nil
 }
 
-// CountTokens implements token counting for AICO.
-// Currently it returns an error as AICO may not have a dedicated token count endpoint.
+func (e *AICOExecutor) applyOverrides(auth *cliproxyauth.Auth, requestedModel string, payload []byte) []byte {
+	cField, mField := e.resolveFieldNames(auth, requestedModel)
+	tModel := e.resolveTargetModel(auth, requestedModel)
+
+	if cField == "content" && mField == "model" && tModel == "" {
+		return payload
+	}
+
+	// Update the content array in AICO request
+	content := gjson.GetBytes(payload, "content").Array()
+	newContent := make([]map[string]interface{}, 0, len(content))
+	
+	for _, field := range content {
+		fMap := field.Map()
+		fName := fMap["field_name"].String()
+		fType := fMap["type"].String()
+		fVal := fMap["value"].String()
+
+		finalName := fName
+		finalValue := fVal
+
+		if fName == "content" {
+			finalName = cField
+		} else if fName == "model" {
+			finalName = mField
+			if tModel != "" {
+				finalValue = tModel
+			}
+		}
+
+		newContent = append(newContent, map[string]interface{}{
+			"field_name": finalName,
+			"type":       fType,
+			"value":      finalValue,
+		})
+	}
+
+	out, _ := sjson.SetBytes(payload, "content", newContent)
+	return out
+}
+
 func (e *AICOExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	return cliproxyexecutor.Response{}, fmt.Errorf("aico executor: CountTokens not implemented")
 }
 
-// Refresh implements credential refreshing for AICO.
-// Since AICO uses static API keys, this is a no-op that returns the original auth.
 func (e *AICOExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*cliproxyauth.Auth, error) {
 	return auth, nil
 }
@@ -346,11 +388,11 @@ func (e *AICOExecutor) resolveFieldNames(auth *cliproxyauth.Auth, modelName stri
 
 func (e *AICOExecutor) resolveTargetModel(auth *cliproxyauth.Auth, modelName string) string {
 	if auth == nil || e.cfg == nil {
-		return modelName
+		return ""
 	}
 	_, apiKey := e.resolveCredentials(auth)
 	if apiKey == "" {
-		return modelName
+		return ""
 	}
 
 	for i := range e.cfg.AICOKey {
@@ -359,15 +401,12 @@ func (e *AICOExecutor) resolveTargetModel(auth *cliproxyauth.Auth, modelName str
 			for j := range entry.Models {
 				m := &entry.Models[j]
 				if strings.EqualFold(strings.TrimSpace(m.Alias), modelName) {
-					if m.TargetModel != "" {
-						return m.TargetModel
-					}
-					return modelName
+					return strings.TrimSpace(m.TargetModel)
 				}
 			}
 		}
 	}
-	return modelName
+	return ""
 }
 
 func (e *AICOExecutor) resolveCredentials(auth *cliproxyauth.Auth) (baseURL, apiKey string) {
@@ -395,15 +434,12 @@ func (e *AICOExecutor) newHTTPClient(ctx context.Context, auth *cliproxyauth.Aut
 
 	client := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 	
-	// If we need to skip verify, we MUST ensure the transport supports it.
 	if skipVerify {
 		if client.Transport == nil {
 			client.Transport = http.DefaultTransport
 		}
 		
-		// If it's a standard Transport, we can override TLSClientConfig.
 		if tr, ok := client.Transport.(*http.Transport); ok {
-			// Clone the transport to avoid polluting the global one if it's http.DefaultTransport
 			newTr := tr.Clone()
 			if newTr.TLSClientConfig == nil {
 				newTr.TLSClientConfig = &tls.Config{}

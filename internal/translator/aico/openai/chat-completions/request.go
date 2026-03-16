@@ -11,29 +11,8 @@ import (
 
 // ConvertOpenAIRequestToAICO converts an OpenAI Chat Completions request (raw JSON)
 // into an AICO workflow request JSON.
-func ConvertOpenAIRequestToAICO(idParam string, inputRawJSON []byte, stream bool) []byte {
-	// Note: workflowID from idParam is currently not used in the body, 
-	// but might be used if AICO requires it in the content array.
-	// For now we keep the decoding logic but avoid the 'unused' error.
-	
-	contentFieldName := "content"
-	modelFieldName := "model"
-	targetModelName := ""
-
-	// Decode encoded field names if present: "id|contentField|modelField|targetModel"
-	if strings.Contains(idParam, "|") {
-		parts := strings.Split(idParam, "|")
-		if len(parts) >= 2 && parts[1] != "" {
-			contentFieldName = parts[1]
-		}
-		if len(parts) >= 3 && parts[2] != "" {
-			modelFieldName = parts[2]
-		}
-		if len(parts) >= 4 && parts[3] != "" {
-			targetModelName = parts[3]
-		}
-	}
-
+// idParam is expected to be the workflow ID.
+func ConvertOpenAIRequestToAICO(workflowID string, inputRawJSON []byte, stream bool) []byte {
 	rawJSON := inputRawJSON
 	
 	// Base AICO request structure
@@ -43,7 +22,7 @@ func ConvertOpenAIRequestToAICO(idParam string, inputRawJSON []byte, stream bool
 		out, _ = sjson.SetBytes(out, "stream", true)
 	}
 
-	// Extract messages from OpenAI request
+	// Extract messages and build prompt
 	messages := gjson.GetBytes(rawJSON, "messages")
 	var promptBuilder strings.Builder
 	
@@ -55,12 +34,10 @@ func ConvertOpenAIRequestToAICO(idParam string, inputRawJSON []byte, stream bool
 			if promptBuilder.Len() > 0 {
 				promptBuilder.WriteString("\n\n")
 			}
-			// Simple role title case
 			roleTitle := role
 			if len(role) > 0 {
 				roleTitle = strings.ToUpper(role[:1]) + role[1:]
 			}
-			// Format as "Role: Content"
 			promptBuilder.WriteString(fmt.Sprintf("%s: %s", roleTitle, content))
 		}
 		return true
@@ -68,20 +45,20 @@ func ConvertOpenAIRequestToAICO(idParam string, inputRawJSON []byte, stream bool
 	
 	prompt := promptBuilder.String()
 	
-	// AICO content fields
-	// 1. model (actual model name mapped from alias)
-	if targetModelName == "" {
-		targetModelName = gjson.GetBytes(rawJSON, "model").String()
-	}
+	// Default field names. 
+	// Professional Tip: The Executor should handle custom field overrides 
+	// by modifying the rawJSON before calling Translate, but since AICO's 
+	// structure is an array of fields, we will keep it simple here.
+	modelName := gjson.GetBytes(rawJSON, "model").String()
 	
 	contentFields := []map[string]interface{}{
 		{
-			"field_name": modelFieldName,
+			"field_name": "model",
 			"type":       "input",
-			"value":      targetModelName,
+			"value":      modelName,
 		},
 		{
-			"field_name": contentFieldName,
+			"field_name": "content",
 			"type":       "input",
 			"value":      prompt,
 		},
