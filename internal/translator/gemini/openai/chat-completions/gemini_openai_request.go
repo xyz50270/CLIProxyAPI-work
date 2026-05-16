@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/misc"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/translator/gemini/common"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/misc"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/translator/gemini/common"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -257,7 +257,7 @@ func ConvertOpenAIRequestToGemini(modelName string, inputRawJSON []byte, _ bool)
 							continue
 						}
 						fid := tc.Get("id").String()
-						fname := tc.Get("function.name").String()
+						fname := util.SanitizeFunctionName(tc.Get("function.name").String())
 						fargs := tc.Get("function.arguments").String()
 						node, _ = sjson.SetBytes(node, "parts."+itoa(p)+".functionCall.name", fname)
 						node, _ = sjson.SetRawBytes(node, "parts."+itoa(p)+".functionCall.args", []byte(fargs))
@@ -274,7 +274,7 @@ func ConvertOpenAIRequestToGemini(modelName string, inputRawJSON []byte, _ bool)
 					pp := 0
 					for _, fid := range fIDs {
 						if name, ok := tcID2Name[fid]; ok {
-							toolNode, _ = sjson.SetBytes(toolNode, "parts."+itoa(pp)+".functionResponse.name", name)
+							toolNode, _ = sjson.SetBytes(toolNode, "parts."+itoa(pp)+".functionResponse.name", util.SanitizeFunctionName(name))
 							resp := toolResponses[fid]
 							if resp == "" {
 								resp = "{}"
@@ -311,32 +311,39 @@ func ConvertOpenAIRequestToGemini(modelName string, inputRawJSON []byte, _ bool)
 						if errRename != nil {
 							log.Warnf("Failed to rename parameters for tool '%s': %v", fn.Get("name").String(), errRename)
 							var errSet error
-							fnRaw, errSet = sjson.Set(fnRaw, "parametersJsonSchema.type", "object")
+							fnRawBytes := []byte(fnRaw)
+							fnRawBytes, errSet = sjson.SetBytes(fnRawBytes, "parametersJsonSchema.type", "object")
 							if errSet != nil {
 								log.Warnf("Failed to set default schema type for tool '%s': %v", fn.Get("name").String(), errSet)
 								continue
 							}
-							fnRaw, errSet = sjson.SetRaw(fnRaw, "parametersJsonSchema.properties", `{}`)
+							fnRawBytes, errSet = sjson.SetRawBytes(fnRawBytes, "parametersJsonSchema.properties", []byte(`{}`))
 							if errSet != nil {
 								log.Warnf("Failed to set default schema properties for tool '%s': %v", fn.Get("name").String(), errSet)
 								continue
 							}
+							fnRaw = string(fnRawBytes)
 						} else {
 							fnRaw = renamed
 						}
 					} else {
 						var errSet error
-						fnRaw, errSet = sjson.Set(fnRaw, "parametersJsonSchema.type", "object")
+						fnRawBytes := []byte(fnRaw)
+						fnRawBytes, errSet = sjson.SetBytes(fnRawBytes, "parametersJsonSchema.type", "object")
 						if errSet != nil {
 							log.Warnf("Failed to set default schema type for tool '%s': %v", fn.Get("name").String(), errSet)
 							continue
 						}
-						fnRaw, errSet = sjson.SetRaw(fnRaw, "parametersJsonSchema.properties", `{}`)
+						fnRawBytes, errSet = sjson.SetRawBytes(fnRawBytes, "parametersJsonSchema.properties", []byte(`{}`))
 						if errSet != nil {
 							log.Warnf("Failed to set default schema properties for tool '%s': %v", fn.Get("name").String(), errSet)
 							continue
 						}
+						fnRaw = string(fnRawBytes)
 					}
+					fnRawBytes := []byte(fnRaw)
+					fnRawBytes, _ = sjson.SetBytes(fnRawBytes, "name", util.SanitizeFunctionName(fn.Get("name").String()))
+					fnRaw = string(fnRawBytes)
 					fnRaw, _ = sjson.Delete(fnRaw, "strict")
 					if !hasFunction {
 						functionToolNode, _ = sjson.SetRawBytes(functionToolNode, "functionDeclarations", []byte("[]"))

@@ -8,15 +8,15 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
-	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
 	"github.com/tidwall/gjson"
 )
 
 func TestCodexExecutorCacheHelper_OpenAIChatCompletions_StablePromptCacheKeyFromAPIKey(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(recorder)
-	ginCtx.Set("apiKey", "test-api-key")
+	ginCtx.Set("userApiKey", "test-api-key")
 
 	ctx := context.WithValue(context.Background(), "gin", ginCtx)
 	executor := &CodexExecutor{}
@@ -42,8 +42,8 @@ func TestCodexExecutorCacheHelper_OpenAIChatCompletions_StablePromptCacheKeyFrom
 	if gotKey != expectedKey {
 		t.Fatalf("prompt_cache_key = %q, want %q", gotKey, expectedKey)
 	}
-	if gotConversation := httpReq.Header.Get("Conversation_id"); gotConversation != expectedKey {
-		t.Fatalf("Conversation_id = %q, want %q", gotConversation, expectedKey)
+	if gotConversation := httpReq.Header.Get("Conversation_id"); gotConversation != "" {
+		t.Fatalf("Conversation_id = %q, want empty", gotConversation)
 	}
 	if gotSession := httpReq.Header.Get("Session_id"); gotSession != expectedKey {
 		t.Fatalf("Session_id = %q, want %q", gotSession, expectedKey)
