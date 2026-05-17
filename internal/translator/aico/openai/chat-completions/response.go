@@ -17,7 +17,7 @@ type aicoToOpenAIState struct {
 }
 
 // ConvertAICOResponseToOpenAI translates AICO streaming response chunk to OpenAI format.
-func ConvertAICOResponseToOpenAI(_ context.Context, modelName string, _, _, rawJSON []byte, param *any) []string {
+func ConvertAICOResponseToOpenAI(_ context.Context, modelName string, _, _, rawJSON []byte, param *any) [][]byte {
 	logrus.Debugf("aico translator: processing stream chunk: %s", string(rawJSON))
 	if *param == nil {
 		*param = &aicoToOpenAIState{
@@ -38,14 +38,14 @@ func ConvertAICOResponseToOpenAI(_ context.Context, modelName string, _, _, rawJ
 		return nil
 	}
 
-	var chunks []string
+	var chunks [][]byte
 
 	// 1. Handle incremental content (New standard way in AICO)
 	if event == "node_chunk" {
 		deltaContent := gjson.GetBytes(rawJSON, "data.choices.0.delta.content").String()
 		if deltaContent != "" {
 			chunk, _ := sjson.Set(baseTemplate, "choices.0.delta.content", deltaContent)
-			chunks = append(chunks, chunk)
+			chunks = append(chunks, []byte(chunk))
 		}
 	}
 
@@ -65,14 +65,14 @@ func ConvertAICOResponseToOpenAI(_ context.Context, modelName string, _, _, rawJ
 			final, _ = sjson.SetRaw(final, "usage", usage.Raw)
 		}
 		
-		chunks = append(chunks, final)
+		chunks = append(chunks, []byte(final))
 	}
 
 	return chunks
 }
 
 // ConvertAICOResponseToOpenAINonStream translates AICO non-streaming response to OpenAI format.
-func ConvertAICOResponseToOpenAINonStream(_ context.Context, modelName string, _, _, rawJSON []byte, _ *any) string {
+func ConvertAICOResponseToOpenAINonStream(_ context.Context, modelName string, _, _, rawJSON []byte, _ *any) []byte {
 	logrus.Debugf("aico translator: processing non-stream body: %s", string(rawJSON))
 	
 	// Extract output string
@@ -104,5 +104,5 @@ func ConvertAICOResponseToOpenAINonStream(_ context.Context, modelName string, _
 		out, _ = sjson.SetRaw(out, "usage", usage.Raw)
 	}
 
-	return out
+	return []byte(out)
 }

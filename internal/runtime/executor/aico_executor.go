@@ -10,12 +10,13 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
-	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
-	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
-	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
-	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -71,8 +72,8 @@ func (e *AICOExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 	requestedModel := thinking.ParseSuffix(req.Model).ModelName
 	workflowID := e.resolveWorkflowID(auth, requestedModel)
 
-	reporter := newUsageReporter(ctx, e.Identifier(), workflowID, auth)
-	defer reporter.trackFailure(ctx, &err)
+	reporter := helps.NewUsageReporter(ctx, e.Identifier(), workflowID, auth)
+	defer reporter.TrackFailure(ctx, &err)
 
 	baseURL, apiKey := e.resolveCredentials(auth)
 	if baseURL == "" {
@@ -108,7 +109,7 @@ func (e *AICOExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 	log.Debugf("aico executor: sending request to %s", url)
 	log.Debugf("aico executor: request body: %s", string(translated))
 
-	recordAPIRequest(ctx, e.cfg, upstreamRequestLog{
+	helps.RecordAPIRequest(ctx, e.cfg, helps.UpstreamRequestLog{
 		URL:       url,
 		Method:    http.MethodPost,
 		Headers:   httpReq.Header.Clone(),
@@ -123,7 +124,7 @@ func (e *AICOExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 	httpClient := e.newHTTPClient(ctx, auth)
 	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
-		recordAPIResponseError(ctx, e.cfg, err)
+		helps.RecordAPIResponseError(ctx, e.cfg, err)
 		return resp, err
 	}
 	defer func() {
@@ -132,20 +133,20 @@ func (e *AICOExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 		}
 	}()
 	
-	recordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+	helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		b, _ := io.ReadAll(httpResp.Body)
-		appendAPIResponseChunk(ctx, e.cfg, b)
+		helps.AppendAPIResponseChunk(ctx, e.cfg, b)
 		err = statusErr{code: httpResp.StatusCode, msg: string(b)}
 		return resp, err
 	}
 	
 	body, err := io.ReadAll(httpResp.Body)
 	if err != nil {
-		recordAPIResponseError(ctx, e.cfg, err)
+		helps.RecordAPIResponseError(ctx, e.cfg, err)
 		return resp, err
 	}
-	appendAPIResponseChunk(ctx, e.cfg, body)
+	helps.AppendAPIResponseChunk(ctx, e.cfg, body)
 	log.Debugf("aico executor: non-stream raw response: %s", string(body))
 	
 	var param any
@@ -158,8 +159,8 @@ func (e *AICOExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 	requestedModel := thinking.ParseSuffix(req.Model).ModelName
 	workflowID := e.resolveWorkflowID(auth, requestedModel)
 
-	reporter := newUsageReporter(ctx, e.Identifier(), workflowID, auth)
-	defer reporter.trackFailure(ctx, &err)
+	reporter := helps.NewUsageReporter(ctx, e.Identifier(), workflowID, auth)
+	defer reporter.TrackFailure(ctx, &err)
 
 	baseURL, apiKey := e.resolveCredentials(auth)
 	if baseURL == "" {
@@ -196,7 +197,7 @@ func (e *AICOExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 	log.Debugf("aico executor: sending request to %s", url)
 	log.Debugf("aico executor: request body: %s", string(translated))
 
-	recordAPIRequest(ctx, e.cfg, upstreamRequestLog{
+	helps.RecordAPIRequest(ctx, e.cfg, helps.UpstreamRequestLog{
 		URL:       url,
 		Method:    http.MethodPost,
 		Headers:   httpReq.Header.Clone(),
@@ -211,14 +212,14 @@ func (e *AICOExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 	httpClient := e.newHTTPClient(ctx, auth)
 	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
-		recordAPIResponseError(ctx, e.cfg, err)
+		helps.RecordAPIResponseError(ctx, e.cfg, err)
 		return nil, err
 	}
 	
-	recordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+	helps.RecordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		b, _ := io.ReadAll(httpResp.Body)
-		appendAPIResponseChunk(ctx, e.cfg, b)
+		helps.AppendAPIResponseChunk(ctx, e.cfg, b)
 		if errClose := httpResp.Body.Close(); errClose != nil {
 			log.Errorf("aico executor: close response body error: %v", errClose)
 		}
@@ -264,7 +265,7 @@ func (e *AICOExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 					chunkJSON, _ = sjson.SetBytes(dataLine, "event_type", currentEvent)
 				}
 				
-				appendAPIResponseChunk(ctx, e.cfg, chunkJSON)
+				helps.AppendAPIResponseChunk(ctx, e.cfg, chunkJSON)
 				chunks := sdktranslator.TranslateStream(ctx, to, from, requestedModel, opts.OriginalRequest, translated, chunkJSON, &param)
 				for i := range chunks {
 					out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunks[i])}
@@ -272,7 +273,7 @@ func (e *AICOExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 			}
 		}
 		if errScan := scanner.Err(); errScan != nil {
-			recordAPIResponseError(ctx, e.cfg, errScan)
+			helps.RecordAPIResponseError(ctx, e.cfg, errScan)
 			out <- cliproxyexecutor.StreamChunk{Err: errScan}
 		}
 	}()
@@ -432,7 +433,7 @@ func (e *AICOExecutor) newHTTPClient(ctx context.Context, auth *cliproxyauth.Aut
 		log.Debugf("aico executor: insecure-skip-verify is ENABLED for auth %s", auth.ID)
 	}
 
-	client := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	client := helps.NewProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
 	
 	if skipVerify {
 		if client.Transport == nil {

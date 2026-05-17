@@ -1471,7 +1471,7 @@ func buildAICOConfigModels(entry *config.AICOKey) []*ModelInfo {
 	if entry == nil {
 		return nil
 	}
-	return buildConfigModels(entry.Models, "sinopec", "aico")
+	return buildConfigModels(entry.Models, "sino", "aico")
 }
 
 func (s *Service) oauthExcludedModels(provider, authKind string) []string {
